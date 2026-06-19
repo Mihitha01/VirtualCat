@@ -16,13 +16,14 @@
     #cat {
       width: 120px;
       height: 120px;
-      background: orange;
-      border-radius: 50%;
+      image-rendering: pixelated;
+      user-select: none;
+      pointer-events: none;
     }
   </style>
 </head>
 <body>
-  <div id="cat"></div>
+  <img id="cat" src="./assets/cat/idle.png" />
 
   <script src="./renderer.js"></script>
 </body>

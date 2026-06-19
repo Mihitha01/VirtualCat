@@ -12,5 +12,7 @@ contextBridge.exposeInMainWorld("virtualCat", {
   onPetModeChanged: (callback) => subscribe("pet-mode-changed", callback),
   onSettingsChanged: (callback) => subscribe("settings-changed", callback),
   setPetHovering: (isHovering) => ipcRenderer.send("pet-hover-changed", Boolean(isHovering)),
-  toggleFollowMode: () => ipcRenderer.send("toggle-follow-mode")
+  toggleFollowMode: () => ipcRenderer.send("toggle-follow-mode"),
+  reportInteraction: () => ipcRenderer.send("pet-interaction"),
+  reportPetting: () => ipcRenderer.send("petting-detected")
 });

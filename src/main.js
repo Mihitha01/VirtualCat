@@ -13,11 +13,12 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createCatWindow(settings) {
   const cursor = screen.getCursorScreenPoint();
+  const initialPosition = getSafeInitialPosition(cursor);
   catWindow = new BrowserWindow({
     width: WINDOW_SIZE,
     height: WINDOW_SIZE,
-    x: cursor.x - WINDOW_SIZE / 2,
-    y: cursor.y - WINDOW_SIZE / 2,
+    x: initialPosition.x,
+    y: initialPosition.y,
     frame: false,
     transparent: true,
     resizable: false,
@@ -34,7 +35,18 @@ function createCatWindow(settings) {
 
   catWindow.loadFile(path.join(__dirname, "index.html"));
   applyClickThrough(settings.clickThrough);
+  catWindow.webContents.on("render-process-gone", (_event, details) => {
+    if (isQuitting) return;
+    console.error("Virtual Cat renderer stopped; reloading it.", details.reason);
+    catWindow.webContents.once("did-finish-load", () => {
+      catWindow.webContents.send("settings-changed", settingsStore.get());
+      petEngine?.syncRenderer();
+      petEngine?.ensureOnScreen();
+    });
+    catWindow.reload();
+  });
   catWindow.once("ready-to-show", () => catWindow.showInactive());
+  catWindow.on("move", () => petEngine?.ensureOnScreen());
   catWindow.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -42,6 +54,19 @@ function createCatWindow(settings) {
       rebuildTrayMenu();
     }
   });
+}
+
+function getSafeInitialPosition(cursor) {
+  const area = screen.getDisplayNearestPoint(cursor).workArea;
+  const margin = 8;
+  const minX = area.x + margin;
+  const minY = area.y + margin;
+  const maxX = Math.max(minX, area.x + area.width - WINDOW_SIZE - margin);
+  const maxY = Math.max(minY, area.y + area.height - WINDOW_SIZE - margin);
+  return {
+    x: Math.round(Math.min(Math.max(cursor.x - WINDOW_SIZE / 2, minX), maxX)),
+    y: Math.round(Math.min(Math.max(cursor.y - WINDOW_SIZE / 2, minY), maxY))
+  };
 }
 
 function createTray() {
@@ -155,6 +180,14 @@ app.whenReady().then(() => {
       setCatHovering(false);
       rebuildTrayMenu();
     }
+  });
+
+  ipcMain.on("pet-interaction", (event) => {
+    if (event.sender === catWindow.webContents) petEngine.interact();
+  });
+
+  ipcMain.on("petting-detected", (event) => {
+    if (event.sender === catWindow.webContents) petEngine.pet();
   });
 
   catWindow.webContents.once("did-finish-load", () => {

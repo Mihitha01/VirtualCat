@@ -6,9 +6,12 @@ Virtual Cat is a small Windows and macOS desktop pet inspired by the Linux `onek
 
 - Smooth 60 FPS blended animation from one 8×4 sprite sheet
 - Autonomous roaming with idle, walking, running, and sleeping behavior
-- Fatigue-based naps after sustained movement, with automatic waking after rest
+- Sleeping after 20 seconds without clicking or touching the cat
+- Up/down petting gestures trigger an animated heart reaction
 - Strict work-area containment so the cat stays fully visible on screen
 - A visibility watchdog that corrects unexpected OS-level window movement
+- Atomic fixed-size window movement to prevent DPI-related size growth
+- Cached sprite paints and automatic renderer recovery if Chromium drops the transparent surface
 - Click the cat to follow the cursor; click it again to resume free roaming
 - Natural occasional blinking without whole-sprite fading
 - A tray action to bring a lost cat back to the current pointer display
@@ -34,7 +37,7 @@ Use the tray icon to control or quit the app. Closing the pet window hides it; i
 
 ## Sprite sheet
 
-Place the sprite at `src/assets/cat/cat-spritesheet.png`. It must be an 8×4 grid with eight frames per row:
+Place the sprite at `src/assets/cat/cat-spritesheet.png`. It must be an 8×5 grid with eight frames per row:
 
 | Row | Animation |
 | --- | --- |
@@ -42,8 +45,9 @@ Place the sprite at `src/assets/cat/cat-spritesheet.png`. It must be an 8×4 gri
 | 1 | Walking |
 | 2 | Running |
 | 3 | Sleeping |
+| 4 | Loving / heart reaction |
 
-The renderer reads the image's natural dimensions, divides its width by eight and height by four, and blends adjacent poses on every display frame. Keep every cell the same size and preserve transparent padding consistently. The sprite uses CSS background positioning and `image-rendering: pixelated`.
+The renderer reads the image's natural dimensions, dividing its width by eight and height by five. Keep every cell the same size and preserve transparent padding consistently. The sprite uses CSS background positioning and `image-rendering: pixelated`.
 
 ## Settings
 

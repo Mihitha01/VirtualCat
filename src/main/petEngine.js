@@ -2,13 +2,15 @@ const PET_STATES = Object.freeze({
   IDLE: "idle",
   WALKING: "walking",
   RUNNING: "running",
-  SLEEPING: "sleeping"
+  SLEEPING: "sleeping",
+  LOVING: "loving"
 });
 
 const TICK_MS = 16;
 const CURSOR_OFFSET = 80;
 const TARGET_REACHED_DISTANCE = 20;
 const EDGE_MARGIN = 8;
+const LOVING_DURATION_MS = 1800;
 
 function createPetEngine({ window, screen, windowSize, getSettings, onSleepChanged }) {
   const initialBounds = window.getBounds();
@@ -22,8 +24,8 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   let state = PET_STATES.IDLE;
   let lastSentState = null;
   let lastSentDirection = null;
-  let activeMovementMs = 0;
-  let tiredSleepUntil = 0;
+  let lastInteractionAt = Date.now();
+  let lovingUntil = 0;
   let roamTarget = null;
   let restUntil = Date.now() + randomBetween(1000, 3000);
 
@@ -49,15 +51,20 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     const cursor = screen.getCursorScreenPoint();
     keepWindowOnScreen();
 
-    const settings = getSettings();
-    if (forcedSleep || now < tiredSleepUntil) {
+    if (forcedSleep) {
       setState(PET_STATES.SLEEPING);
       return;
     }
 
-    if (tiredSleepUntil > 0) {
-      tiredSleepUntil = 0;
-      activeMovementMs = 0;
+    if (now < lovingUntil) {
+      setState(PET_STATES.LOVING);
+      return;
+    }
+
+    const settings = getSettings();
+    if (now - lastInteractionAt >= settings.sleepAfterSeconds * 1000) {
+      setState(PET_STATES.SLEEPING);
+      return;
     }
 
     if (paused || !settings.movementEnabled) {
@@ -70,7 +77,6 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
       : getRoamTarget(now);
 
     if (!target) {
-      activeMovementMs = Math.max(0, activeMovementMs - TICK_MS * 0.5);
       setState(PET_STATES.IDLE);
       return;
     }
@@ -86,19 +92,12 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     }
 
     setState(stateFromDistance(distance));
-    activeMovementMs += TICK_MS * (state === PET_STATES.RUNNING ? 1.5 : 1);
-    if (activeMovementMs >= settings.sleepAfterSeconds * 1000) {
-      tiredSleepUntil = now + randomBetween(8000, 15000);
-      setState(PET_STATES.SLEEPING);
-      return;
-    }
     moveToward(target, distance);
   }
 
   function getRoamTarget(now) {
     if (roamTarget) return roamTarget;
     if (now < restUntil) return null;
-
     const center = { x: Math.round(x + windowSize / 2), y: Math.round(y + windowSize / 2) };
     const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
     roamTarget = {
@@ -120,7 +119,7 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     const area = safeMovementArea(display.workArea, windowSize);
     x = clamp(nextX, area.minX, area.maxX);
     y = clamp(nextY, area.minY, area.maxY);
-    window.setPosition(Math.round(x), Math.round(y));
+    placeWindow();
   }
 
   function keepWindowOnScreen() {
@@ -131,30 +130,27 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     if (safeX !== x || safeY !== y) {
       x = safeX;
       y = safeY;
-      window.setPosition(Math.round(x), Math.round(y));
+      placeWindow();
     }
   }
 
   function ensureActualWindowOnScreen() {
     if (window.isDestroyed()) return;
     const bounds = window.getBounds();
-    const center = {
-      x: bounds.x + Math.round(bounds.width / 2),
-      y: bounds.y + Math.round(bounds.height / 2)
-    };
+    const center = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
     const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
     const safeX = clamp(bounds.x, area.minX, area.maxX);
     const safeY = clamp(bounds.y, area.minY, area.maxY);
 
-    if (safeX !== bounds.x || safeY !== bounds.y) {
+    const sizeChanged = bounds.width !== windowSize || bounds.height !== windowSize;
+    if (safeX !== bounds.x || safeY !== bounds.y || sizeChanged) {
       x = safeX;
       y = safeY;
       roamTarget = null;
-      window.setPosition(Math.round(x), Math.round(y));
+      placeWindow();
       return;
     }
 
-    // Keep engine coordinates synchronized if the OS moves the window.
     if (Math.abs(bounds.x - x) > 2 || Math.abs(bounds.y - y) > 2) {
       x = bounds.x;
       y = bounds.y;
@@ -169,7 +165,28 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     y = clamp(cursor.y - windowSize / 2, area.minY, area.maxY);
     roamTarget = null;
     restUntil = Date.now() + 500;
-    window.setPosition(Math.round(x), Math.round(y));
+    placeWindow();
+  }
+
+  function placeWindow() {
+    window.setBounds({
+      x: Math.round(x),
+      y: Math.round(y),
+      width: windowSize,
+      height: windowSize
+    }, false);
+  }
+
+  function interact() {
+    forcedSleep = false;
+    lastInteractionAt = Date.now();
+    if (state === PET_STATES.SLEEPING) setState(PET_STATES.IDLE);
+  }
+
+  function pet() {
+    interact();
+    lovingUntil = Date.now() + LOVING_DURATION_MS;
+    setState(PET_STATES.LOVING);
   }
 
   function setState(nextState) {
@@ -192,16 +209,20 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   }
 
   function sendMode() {
-    if (!window.isDestroyed()) {
-      window.webContents.send("pet-mode-changed", followingCursor ? "following" : "roaming");
-    }
+    if (!window.isDestroyed()) window.webContents.send("pet-mode-changed", followingCursor ? "following" : "roaming");
+  }
+
+  function syncRenderer() {
+    if (window.isDestroyed()) return;
+    window.webContents.send("pet-state-changed", state);
+    window.webContents.send("pet-direction-changed", lastSentDirection || "right");
+    sendMode();
   }
 
   function toggleFollowMode() {
+    interact();
     followingCursor = !followingCursor;
-    forcedSleep = false;
-    tiredSleepUntil = 0;
-    activeMovementMs = 0;
+    lovingUntil = 0;
     roamTarget = null;
     restUntil = followingCursor ? 0 : Date.now() + randomBetween(1000, 3000);
     setState(PET_STATES.IDLE);
@@ -211,13 +232,13 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
 
   function sleep() {
     forcedSleep = true;
+    lovingUntil = 0;
     setState(PET_STATES.SLEEPING);
   }
 
   function wake() {
-    forcedSleep = false;
-    tiredSleepUntil = 0;
-    activeMovementMs = 0;
+    interact();
+    lovingUntil = 0;
     setState(PET_STATES.IDLE);
   }
 
@@ -226,8 +247,11 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     stop,
     sleep,
     wake,
+    pet,
+    interact,
     bringBack,
     ensureOnScreen: ensureActualWindowOnScreen,
+    syncRenderer,
     toggleFollowMode,
     setPaused: (value) => { paused = Boolean(value); },
     isPaused: () => paused,

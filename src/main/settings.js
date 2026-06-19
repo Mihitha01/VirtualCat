@@ -7,7 +7,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   startAtLogin: false,
   movementEnabled: true,
   spriteScale: 0.7,
-  sleepAfterSeconds: 25,
+  sleepAfterSeconds: 20,
   showStateLabel: false,
   animationSpeedMultiplier: 1
 });
@@ -47,7 +47,9 @@ function createSettingsStore(userDataPath) {
 
 function sanitizeSettings(value) {
   const source = value && typeof value === "object" ? value : {};
-  const savedSleepDelay = source.sleepAfterSeconds === 60 ? DEFAULT_SETTINGS.sleepAfterSeconds : source.sleepAfterSeconds;
+  const savedSleepDelay = [25, 60].includes(source.sleepAfterSeconds)
+    ? DEFAULT_SETTINGS.sleepAfterSeconds
+    : source.sleepAfterSeconds;
   return {
     alwaysOnTop: booleanOrDefault(source.alwaysOnTop, DEFAULT_SETTINGS.alwaysOnTop),
     clickThrough: booleanOrDefault(source.clickThrough, DEFAULT_SETTINGS.clickThrough),

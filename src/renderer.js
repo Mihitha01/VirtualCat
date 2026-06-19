@@ -2,9 +2,9 @@ const catElement = document.getElementById("cat");
 const catFrame = document.getElementById("cat-frame");
 const stateLabel = document.getElementById("state-label");
 
-const STATE_ROWS = { idle: 0, walking: 1, running: 2, sleeping: 3 };
+const STATE_ROWS = { idle: 0, walking: 1, running: 2, sleeping: 3, loving: 4 };
 const FRAME_COUNT = 8;
-const CYCLE_MS = { walking: 700, running: 480, sleeping: 1800 };
+const CYCLE_MS = { walking: 700, running: 480, sleeping: 1800, loving: 1400 };
 const IDLE_CYCLE_MS = 6000;
 const OPEN_EYE_FRAMES = [0, 2, 4, 6, 7];
 
@@ -16,12 +16,22 @@ let frameWidth = 0;
 let frameHeight = 0;
 let stateStartedAt = performance.now();
 let hoveringCat = false;
+let lastFrameIndex = -1;
+let lastFrameState = null;
+let lastRenderedDirection = null;
+let lastRenderedLabel = null;
+let lastInteractionReportAt = Number.NEGATIVE_INFINITY;
+let lastPetMovementAt = 0;
+let lastPetDirection = 0;
+let petDirectionChanges = 0;
+let petTravel = 0;
+let lastPetTriggeredAt = Number.NEGATIVE_INFINITY;
 
 const spriteSheet = new Image();
 spriteSheet.src = "./assets/cat/cat-spritesheet.png";
 spriteSheet.addEventListener("load", () => {
   frameWidth = spriteSheet.naturalWidth / FRAME_COUNT;
-  frameHeight = spriteSheet.naturalHeight / 4;
+  frameHeight = spriteSheet.naturalHeight / 5;
   applySize();
   requestAnimationFrame(animate);
 });
@@ -31,13 +41,27 @@ function animate(now) {
   requestAnimationFrame(animate);
 }
 
-function drawFrame(now = performance.now()) {
+function drawFrame(now = performance.now(), force = false) {
   if (!frameWidth || !frameHeight) return;
   const frameIndex = state === "idle" ? idleFrameAt(now) : loopingFrameAt(now);
   const scale = settings.spriteScale;
-  catFrame.style.backgroundPosition = `${-frameIndex * frameWidth * scale}px ${-STATE_ROWS[state] * frameHeight * scale}px`;
-  catElement.style.transform = `scaleX(${direction === "right" ? 1 : -1})`;
-  stateLabel.textContent = `${state} - ${mode}`;
+
+  if (force || frameIndex !== lastFrameIndex || state !== lastFrameState) {
+    catFrame.style.backgroundPosition = `${-frameIndex * frameWidth * scale}px ${-STATE_ROWS[state] * frameHeight * scale}px`;
+    lastFrameIndex = frameIndex;
+    lastFrameState = state;
+  }
+
+  if (force || direction !== lastRenderedDirection) {
+    catElement.style.transform = `scaleX(${direction === "right" ? 1 : -1})`;
+    lastRenderedDirection = direction;
+  }
+
+  const label = `${state} - ${mode}`;
+  if (force || label !== lastRenderedLabel) {
+    stateLabel.textContent = label;
+    lastRenderedLabel = label;
+  }
 }
 
 function idleFrameAt(now) {
@@ -65,26 +89,26 @@ function applySize() {
   catElement.style.height = `${frameHeight * scale}px`;
   catFrame.style.backgroundSize = `${spriteSheet.naturalWidth * scale}px ${spriteSheet.naturalHeight * scale}px`;
   stateLabel.style.display = settings.showStateLabel ? "block" : "none";
-  drawFrame();
+  drawFrame(performance.now(), true);
 }
 
 window.virtualCat.onPetStateChanged((nextState) => {
   if (!(nextState in STATE_ROWS)) return;
   state = nextState;
   stateStartedAt = performance.now();
-  drawFrame();
+  drawFrame(performance.now(), true);
 });
 
 window.virtualCat.onPetDirectionChanged((nextDirection) => {
   if (nextDirection !== "left" && nextDirection !== "right") return;
   direction = nextDirection;
-  drawFrame();
+  drawFrame(performance.now(), true);
 });
 
 window.virtualCat.onPetModeChanged((nextMode) => {
   if (nextMode !== "roaming" && nextMode !== "following") return;
   mode = nextMode;
-  drawFrame();
+  drawFrame(performance.now(), true);
 });
 
 window.virtualCat.onSettingsChanged((nextSettings) => {
@@ -100,10 +124,14 @@ document.addEventListener("mousemove", (event) => {
     hoveringCat = isOverCat;
     window.virtualCat.setPetHovering(isOverCat);
   }
+
+  if (isOverCat) detectPetting(event);
+  else resetPettingGesture();
 });
 
 document.addEventListener("mouseleave", () => {
   hoveringCat = false;
+  resetPettingGesture();
   window.virtualCat.setPetHovering(false);
 });
 
@@ -114,3 +142,34 @@ catElement.addEventListener("click", (event) => {
   window.virtualCat.toggleFollowMode();
   window.virtualCat.setPetHovering(false);
 });
+
+function detectPetting(event) {
+  const now = performance.now();
+  if (now - lastInteractionReportAt >= 400) {
+    lastInteractionReportAt = now;
+    window.virtualCat.reportInteraction();
+  }
+
+  if (now - lastPetMovementAt > 300) resetPettingGesture();
+  const verticalMovement = event.movementY;
+  if (Math.abs(verticalMovement) >= 2) {
+    const direction = Math.sign(verticalMovement);
+    petTravel += Math.abs(verticalMovement);
+    if (lastPetDirection && direction !== lastPetDirection) petDirectionChanges += 1;
+    lastPetDirection = direction;
+    lastPetMovementAt = now;
+  }
+
+  if (petTravel >= 45 && petDirectionChanges >= 2 && now - lastPetTriggeredAt >= 1200) {
+    lastPetTriggeredAt = now;
+    window.virtualCat.reportPetting();
+    resetPettingGesture();
+  }
+}
+
+function resetPettingGesture() {
+  lastPetMovementAt = 0;
+  lastPetDirection = 0;
+  petDirectionChanges = 0;
+  petTravel = 0;
+}

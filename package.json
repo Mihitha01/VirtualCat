@@ -1,12 +1,30 @@
 {
   "name": "virtual-cat",
-  "version": "0.1.0",
-  "description": "A desktop virtual cat inspired by oneko",
+  "version": "1.0.0",
+  "description": "A friendly pixel-art desktop cat inspired by oneko",
   "main": "src/main.js",
+  "author": "ForgeCell",
+  "license": "UNLICENSED",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
   "devDependencies": {
-    "electron": "42.4.1"
+    "electron": "42.4.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.forgecell.virtualcat",
+    "productName": "Virtual Cat",
+    "directories": { "output": "release" },
+    "files": ["src/**/*", "package.json"],
+    "win": { "target": ["nsis", "portable"] },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.entertainment"
+    }
   }
 }

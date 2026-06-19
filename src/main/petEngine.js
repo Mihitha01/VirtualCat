@@ -11,6 +11,16 @@ const CURSOR_OFFSET = 80;
 const TARGET_REACHED_DISTANCE = 20;
 const EDGE_MARGIN = 8;
 const LOVING_DURATION_MS = 1800;
+const DIRECTION_DEAD_ZONE = 8;
+const DIRECTION_STABILITY_MS = 140;
+const ROAM_CANDIDATE_COUNT = 12;
+const FAR_ROAM_CANDIDATE_POOL = 3;
+const RUN_ENTER_DISTANCE_FOLLOWING = 700;
+const RUN_ENTER_DISTANCE_ROAMING = 900;
+const RUN_EXIT_DISTANCE = 420;
+const MIN_WALK_BEFORE_RUN_MS = 900;
+const MIN_RUN_DURATION_MS = 800;
+const SPEED_EASING = 0.12;
 
 function createPetEngine({ window, screen, windowSize, getSettings, onSleepChanged }) {
   const initialBounds = window.getBounds();
@@ -22,8 +32,12 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   let forcedSleep = false;
   let followingCursor = false;
   let state = PET_STATES.IDLE;
+  let stateChangedAt = Date.now();
+  let currentSpeed = 0;
   let lastSentState = null;
   let lastSentDirection = null;
+  let pendingDirection = null;
+  let pendingDirectionSince = 0;
   let lastInteractionAt = Date.now();
   let lovingUntil = 0;
   let roamTarget = null;
@@ -85,13 +99,13 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     if (distance <= TARGET_REACHED_DISTANCE) {
       if (!followingCursor) {
         roamTarget = null;
-        restUntil = now + randomBetween(2000, 6000);
+        restUntil = now + randomBetween(1500, 3500);
       }
       setState(PET_STATES.IDLE);
       return;
     }
 
-    setState(stateFromDistance(distance));
+    setState(movementState(state, distance, followingCursor, now - stateChangedAt));
     moveToward(target, distance);
   }
 
@@ -100,18 +114,31 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     if (now < restUntil) return null;
     const center = { x: Math.round(x + windowSize / 2), y: Math.round(y + windowSize / 2) };
     const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
-    roamTarget = {
-      x: randomBetween(area.minX, area.maxX),
-      y: randomBetween(area.minY, area.maxY)
-    };
+    const candidates = [];
+    for (let attempt = 0; attempt < ROAM_CANDIDATE_COUNT; attempt += 1) {
+      const candidate = {
+        x: randomBetween(area.minX, area.maxX),
+        y: randomBetween(area.minY, area.maxY)
+      };
+      candidates.push({
+        ...candidate,
+        distance: Math.hypot(candidate.x - x, candidate.y - y)
+      });
+    }
+    candidates.sort((first, second) => second.distance - first.distance);
+    const farPool = candidates.slice(0, FAR_ROAM_CANDIDATE_POOL);
+    const selected = farPool[Math.floor(Math.random() * farPool.length)];
+    roamTarget = { x: selected.x, y: selected.y };
     return roamTarget;
   }
 
   function moveToward(target, distance) {
-    const step = Math.min(movementSpeed(state), distance);
+    const desiredSpeed = movementSpeed(state);
+    currentSpeed += (desiredSpeed - currentSpeed) * SPEED_EASING;
+    const step = Math.min(Math.max(currentSpeed, 0.25), distance);
     const deltaX = ((target.x - x) / distance) * step;
     const deltaY = ((target.y - y) / distance) * step;
-    if (Math.abs(deltaX) > 0.05) sendDirection(deltaX > 0 ? "right" : "left");
+    updateDirection(target.x - x, Date.now());
 
     const nextX = x + deltaX;
     const nextY = y + deltaY;
@@ -151,11 +178,9 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
       return;
     }
 
-    if (Math.abs(bounds.x - x) > 2 || Math.abs(bounds.y - y) > 2) {
-      x = bounds.x;
-      y = bounds.y;
-      roamTarget = null;
-    }
+    // Do not synchronize engine coordinates from every OS move event. Native
+    // bounds can briefly lag behind our 60 FPS setBounds calls, which used to
+    // clear the roaming target and make the cat rapidly choose left/right.
   }
 
   function bringBack() {
@@ -190,8 +215,16 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   }
 
   function setState(nextState) {
+    if (nextState === PET_STATES.IDLE || nextState === PET_STATES.SLEEPING || nextState === PET_STATES.LOVING) {
+      clearPendingDirection();
+    }
     const sleepChanged = (state === PET_STATES.SLEEPING) !== (nextState === PET_STATES.SLEEPING);
+    const stateChanged = state !== nextState;
     state = nextState;
+    if (stateChanged) stateChangedAt = Date.now();
+    if (nextState === PET_STATES.IDLE || nextState === PET_STATES.SLEEPING || nextState === PET_STATES.LOVING) {
+      currentSpeed = 0;
+    }
     sendState(nextState);
     if (sleepChanged) onSleepChanged?.();
   }
@@ -205,7 +238,39 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   function sendDirection(direction) {
     if (lastSentDirection === direction || window.isDestroyed()) return;
     lastSentDirection = direction;
+    clearPendingDirection();
     window.webContents.send("pet-direction-changed", direction);
+  }
+
+  function updateDirection(horizontalDistance, now) {
+    if (Math.abs(horizontalDistance) < DIRECTION_DEAD_ZONE) {
+      clearPendingDirection();
+      return;
+    }
+
+    const candidate = horizontalDistance > 0 ? "right" : "left";
+    if (!lastSentDirection) {
+      sendDirection(candidate);
+      return;
+    }
+
+    if (candidate === lastSentDirection) {
+      clearPendingDirection();
+      return;
+    }
+
+    if (pendingDirection !== candidate) {
+      pendingDirection = candidate;
+      pendingDirectionSince = now;
+      return;
+    }
+
+    if (now - pendingDirectionSince >= DIRECTION_STABILITY_MS) sendDirection(candidate);
+  }
+
+  function clearPendingDirection() {
+    pendingDirection = null;
+    pendingDirectionSince = 0;
   }
 
   function sendMode() {
@@ -224,7 +289,7 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     followingCursor = !followingCursor;
     lovingUntil = 0;
     roamTarget = null;
-    restUntil = followingCursor ? 0 : Date.now() + randomBetween(1000, 3000);
+    restUntil = followingCursor ? 0 : Date.now() + randomBetween(1000, 2000);
     setState(PET_STATES.IDLE);
     sendMode();
     return followingCursor;
@@ -260,10 +325,19 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   };
 }
 
-function stateFromDistance(distance) {
-  if (distance > 550) return PET_STATES.RUNNING;
-  if (distance > TARGET_REACHED_DISTANCE) return PET_STATES.WALKING;
-  return PET_STATES.IDLE;
+function movementState(currentState, distance, isFollowingCursor, timeInState) {
+    if (currentState === PET_STATES.RUNNING) {
+      if (timeInState < MIN_RUN_DURATION_MS) return PET_STATES.RUNNING;
+      return distance <= RUN_EXIT_DISTANCE ? PET_STATES.WALKING : PET_STATES.RUNNING;
+    }
+
+    if (currentState === PET_STATES.WALKING) {
+      const runDistance = isFollowingCursor ? RUN_ENTER_DISTANCE_FOLLOWING : RUN_ENTER_DISTANCE_ROAMING;
+      const walkedLongEnough = timeInState >= MIN_WALK_BEFORE_RUN_MS;
+      return distance >= runDistance && walkedLongEnough ? PET_STATES.RUNNING : PET_STATES.WALKING;
+    }
+
+    return PET_STATES.WALKING;
 }
 
 function movementSpeed(state) {

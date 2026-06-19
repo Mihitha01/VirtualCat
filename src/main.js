@@ -22,6 +22,10 @@ function createCatWindow(settings) {
     frame: false,
     transparent: true,
     resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
     alwaysOnTop: settings.alwaysOnTop,
     skipTaskbar: true,
     hasShadow: false,
@@ -46,7 +50,6 @@ function createCatWindow(settings) {
     catWindow.reload();
   });
   catWindow.once("ready-to-show", () => catWindow.showInactive());
-  catWindow.on("move", () => petEngine?.ensureOnScreen());
   catWindow.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();

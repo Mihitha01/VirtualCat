@@ -94,9 +94,19 @@ function applySize() {
 
 window.virtualCat.onPetStateChanged((nextState) => {
   if (!(nextState in STATE_ROWS)) return;
+  const now = performance.now();
+  const changingLocomotionSpeed = (state === "walking" || state === "running")
+    && (nextState === "walking" || nextState === "running");
+  let gaitProgress = 0;
+  if (changingLocomotionSpeed) {
+    const oldCycleDuration = CYCLE_MS[state] / settings.animationSpeedMultiplier;
+    gaitProgress = ((now - stateStartedAt) % oldCycleDuration) / oldCycleDuration;
+  }
   state = nextState;
-  stateStartedAt = performance.now();
-  drawFrame(performance.now(), true);
+  stateStartedAt = changingLocomotionSpeed
+    ? now - gaitProgress * (CYCLE_MS[nextState] / settings.animationSpeedMultiplier)
+    : now;
+  drawFrame(now, true);
 });
 
 window.virtualCat.onPetDirectionChanged((nextDirection) => {

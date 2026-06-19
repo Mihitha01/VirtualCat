@@ -14,6 +14,10 @@ Virtual Cat is a small Windows and macOS desktop pet inspired by the Linux `onek
 - Cached sprite paints and automatic renderer recovery if Chromium drops the transparent surface
 - Click the cat to follow the cursor; click it again to resume free roaming
 - Natural occasional blinking without whole-sprite fading
+- Direction hysteresis that prevents rapid left/right flipping near a target
+- Stable roaming targets without OS move-event feedback loops
+- Minimum roaming distance, speed easing, and walk/run transition hysteresis
+- Full-display roaming by selecting among far destination candidates
 - A tray action to bring a lost cat back to the current pointer display
 - Smooth eased movement with multi-monitor work-area safety
 - Left/right facing based on travel direction

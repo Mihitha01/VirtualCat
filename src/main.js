@@ -4,6 +4,7 @@ const { createSettingsStore } = require("./main/settings");
 const { createPetEngine } = require("./main/petEngine");
 
 const WINDOW_SIZE = 200;
+app.commandLine.appendSwitch("force-device-scale-factor", "1");
 let catWindow = null;
 let tray = null;
 let petEngine = null;
@@ -33,17 +34,20 @@ function createCatWindow(settings) {
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     }
   });
 
-  catWindow.loadFile(path.join(__dirname, "index.html"));
+  catWindow.loadFile(path.join(__dirname, "index.html")).catch((error) => {
+    console.error("Could not load the Virtual Cat renderer.", error.message);
+  });
   applyClickThrough(settings.clickThrough);
   catWindow.webContents.on("render-process-gone", (_event, details) => {
     if (isQuitting) return;
     console.error("Virtual Cat renderer stopped; reloading it.", details.reason);
     catWindow.webContents.once("did-finish-load", () => {
-      catWindow.webContents.send("settings-changed", settingsStore.get());
+      catWindow.webContents.send("settings-changed", settingsStore?.get() || settings);
       petEngine?.syncRenderer();
       petEngine?.ensureOnScreen();
     });
@@ -135,6 +139,10 @@ function setCatHovering(isHovering) {
   catWindow.setIgnoreMouseEvents(!isHovering, isHovering ? undefined : { forward: true });
 }
 
+function isTrustedRenderer(event) {
+  return Boolean(catWindow && !catWindow.isDestroyed() && event.sender === catWindow.webContents);
+}
+
 function setStartAtLogin(enabled) {
   app.setLoginItemSettings({
     openAtLogin: enabled,
@@ -172,13 +180,13 @@ app.whenReady().then(() => {
   });
 
   ipcMain.on("pet-hover-changed", (event, isHovering) => {
-    if (event.sender === catWindow.webContents && typeof isHovering === "boolean") {
+    if (isTrustedRenderer(event) && typeof isHovering === "boolean") {
       setCatHovering(isHovering);
     }
   });
 
   ipcMain.on("toggle-follow-mode", (event) => {
-    if (event.sender === catWindow.webContents) {
+    if (isTrustedRenderer(event)) {
       petEngine.toggleFollowMode();
       setCatHovering(false);
       rebuildTrayMenu();
@@ -186,11 +194,11 @@ app.whenReady().then(() => {
   });
 
   ipcMain.on("pet-interaction", (event) => {
-    if (event.sender === catWindow.webContents) petEngine.interact();
+    if (isTrustedRenderer(event)) petEngine.interact();
   });
 
   ipcMain.on("petting-detected", (event) => {
-    if (event.sender === catWindow.webContents) petEngine.pet();
+    if (isTrustedRenderer(event)) petEngine.pet();
   });
 
   catWindow.webContents.once("did-finish-load", () => {
@@ -210,4 +218,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   isQuitting = true;
   petEngine?.stop();
+  for (const channel of ["pet-hover-changed", "toggle-follow-mode", "pet-interaction", "petting-detected"]) {
+    ipcMain.removeAllListeners(channel);
+  }
 });

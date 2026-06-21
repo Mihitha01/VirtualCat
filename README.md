@@ -4,7 +4,7 @@ Virtual Cat is a small Windows and macOS desktop pet inspired by the Linux `onek
 
 ## Features
 
-- Smooth 60 FPS blended animation from one 8×4 sprite sheet
+- Efficient frame-stepped pixel animation from one 8x5 sprite sheet
 - Autonomous roaming with idle, walking, running, and sleeping behavior
 - Sleeping after 20 seconds without clicking or touching the cat
 - Up/down petting gestures trigger an animated heart reaction
@@ -12,6 +12,7 @@ Virtual Cat is a small Windows and macOS desktop pet inspired by the Linux `onek
 - A visibility watchdog that corrects unexpected OS-level window movement
 - Atomic fixed-size window movement to prevent DPI-related size growth
 - Cached sprite paints and automatic renderer recovery if Chromium drops the transparent surface
+- Global-pointer petting detection that ignores window motion
 - Click the cat to follow the cursor; click it again to resume free roaming
 - Natural occasional blinking without whole-sprite fading
 - Direction hysteresis that prevents rapid left/right flipping near a target
@@ -20,6 +21,7 @@ Virtual Cat is a small Windows and macOS desktop pet inspired by the Linux `onek
 - Full-display roaming by selecting among far destination candidates
 - A tray action to bring a lost cat back to the current pointer display
 - Smooth eased movement with multi-monitor work-area safety
+- Seam-aware containment across adjacent monitor work areas
 - Left/right facing based on travel direction
 - Tray controls for visibility, movement, sleep, click-through, always-on-top, and login startup
 - Persistent JSON settings in Electron's per-user `userData` folder
@@ -41,7 +43,7 @@ Use the tray icon to control or quit the app. Closing the pet window hides it; i
 
 ## Sprite sheet
 
-Place the sprite at `src/assets/cat/cat-spritesheet.png`. It must be an 8×5 grid with eight frames per row:
+Place the sprite at `src/assets/cat/cat-spritesheet.png`. It must be an 8x5 grid with eight frames per row:
 
 | Row | Animation |
 | --- | --- |

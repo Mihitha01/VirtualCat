@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 function subscribe(channel, callback) {
+  if (typeof callback !== "function") throw new TypeError("IPC subscription callback must be a function.");
   const listener = (_event, value) => callback(value);
   ipcRenderer.on(channel, listener);
   return () => ipcRenderer.removeListener(channel, listener);

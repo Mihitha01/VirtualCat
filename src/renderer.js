@@ -3,8 +3,10 @@ const catFrame = document.getElementById("cat-frame");
 const stateLabel = document.getElementById("state-label");
 
 const STATE_ROWS = { idle: 0, walking: 1, running: 2, sleeping: 3, loving: 4 };
-const FRAME_COUNT = 8;
-const CYCLE_MS = { walking: 700, running: 480, sleeping: 1800, loving: 1400 };
+const SPRITE_COLUMNS = 8;
+const SPRITE_ROWS = 5;
+const FRAME_COUNT = SPRITE_COLUMNS;
+const CYCLE_MS = { walking: 875, running: 600, sleeping: 1800, loving: 1400 };
 const IDLE_CYCLE_MS = 6000;
 const OPEN_EYE_FRAMES = [0, 2, 4, 6, 7];
 
@@ -14,6 +16,7 @@ let mode = "roaming";
 let settings = { spriteScale: 0.7, showStateLabel: false, animationSpeedMultiplier: 1 };
 let frameWidth = 0;
 let frameHeight = 0;
+let spriteAlphaMask = null;
 let stateStartedAt = performance.now();
 let hoveringCat = false;
 let lastFrameIndex = -1;
@@ -26,15 +29,22 @@ let lastPetDirection = 0;
 let petDirectionChanges = 0;
 let petTravel = 0;
 let lastPetTriggeredAt = Number.NEGATIVE_INFINITY;
+let lastPointerScreenY = null;
 
 const spriteSheet = new Image();
 spriteSheet.src = "./assets/cat/cat-spritesheet.png";
 spriteSheet.addEventListener("load", () => {
-  frameWidth = spriteSheet.naturalWidth / FRAME_COUNT;
-  frameHeight = spriteSheet.naturalHeight / 5;
+  if (spriteSheet.naturalWidth % SPRITE_COLUMNS !== 0 || spriteSheet.naturalHeight % SPRITE_ROWS !== 0) {
+    console.error("Cat sprite sheet dimensions must be divisible by 8 columns and 5 rows.");
+    return;
+  }
+  frameWidth = spriteSheet.naturalWidth / SPRITE_COLUMNS;
+  frameHeight = spriteSheet.naturalHeight / SPRITE_ROWS;
+  spriteAlphaMask = createSpriteAlphaMask();
   applySize();
   requestAnimationFrame(animate);
 });
+spriteSheet.addEventListener("error", () => console.error("Could not load the cat sprite sheet."));
 
 function animate(now) {
   drawFrame(now);
@@ -127,9 +137,7 @@ window.virtualCat.onSettingsChanged((nextSettings) => {
 });
 
 document.addEventListener("mousemove", (event) => {
-  const bounds = catElement.getBoundingClientRect();
-  const isOverCat = event.clientX >= bounds.left && event.clientX <= bounds.right
-    && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+  const isOverCat = isPointOverVisibleCat(event.clientX, event.clientY);
   if (isOverCat !== hoveringCat) {
     hoveringCat = isOverCat;
     window.virtualCat.setPetHovering(isOverCat);
@@ -138,6 +146,46 @@ document.addEventListener("mousemove", (event) => {
   if (isOverCat) detectPetting(event);
   else resetPettingGesture();
 });
+
+function createSpriteAlphaMask() {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = spriteSheet.naturalWidth;
+    canvas.height = spriteSheet.naturalHeight;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(spriteSheet, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const alphaMask = new Uint8Array(canvas.width * canvas.height);
+    for (let sourceIndex = 3, alphaIndex = 0; sourceIndex < pixels.length; sourceIndex += 4, alphaIndex += 1) {
+      alphaMask[alphaIndex] = pixels[sourceIndex];
+    }
+    return alphaMask;
+  } catch (error) {
+    console.warn("Per-pixel cat hit testing is unavailable; using its rectangular bounds.", error.message);
+    return null;
+  }
+}
+
+function isPointOverVisibleCat(clientX, clientY) {
+  const bounds = catElement.getBoundingClientRect();
+  if (
+    clientX < bounds.left
+    || clientX >= bounds.right
+    || clientY < bounds.top
+    || clientY >= bounds.bottom
+  ) {
+    return false;
+  }
+  if (!spriteAlphaMask || lastFrameIndex < 0) return true;
+
+  let sourceX = Math.floor((clientX - bounds.left) / settings.spriteScale);
+  const sourceY = Math.floor((clientY - bounds.top) / settings.spriteScale);
+  if (direction === "left") sourceX = frameWidth - sourceX - 1;
+  const sheetX = lastFrameIndex * frameWidth + sourceX;
+  const sheetY = STATE_ROWS[state] * frameHeight + sourceY;
+  const alpha = spriteAlphaMask[sheetY * spriteSheet.naturalWidth + sheetX];
+  return alpha >= 24;
+}
 
 document.addEventListener("mouseleave", () => {
   hoveringCat = false;
@@ -160,8 +208,12 @@ function detectPetting(event) {
     window.virtualCat.reportInteraction();
   }
 
-  if (now - lastPetMovementAt > 300) resetPettingGesture();
-  const verticalMovement = event.movementY;
+  if (lastPetMovementAt > 0 && now - lastPetMovementAt > 300) resetPettingGesture();
+  const currentScreenY = Number.isFinite(event.screenY) ? event.screenY : null;
+  const verticalMovement = currentScreenY === null || lastPointerScreenY === null
+    ? 0
+    : currentScreenY - lastPointerScreenY;
+  lastPointerScreenY = currentScreenY;
   if (Math.abs(verticalMovement) >= 2) {
     const direction = Math.sign(verticalMovement);
     petTravel += Math.abs(verticalMovement);
@@ -182,4 +234,5 @@ function resetPettingGesture() {
   lastPetDirection = 0;
   petDirectionChanges = 0;
   petTravel = 0;
+  lastPointerScreenY = null;
 }

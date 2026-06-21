@@ -13,14 +13,18 @@ const EDGE_MARGIN = 8;
 const LOVING_DURATION_MS = 1800;
 const DIRECTION_DEAD_ZONE = 8;
 const DIRECTION_STABILITY_MS = 140;
-const ROAM_CANDIDATE_COUNT = 12;
+const ROAM_GRID_COLUMNS = 3;
+const ROAM_GRID_ROWS = 2;
+const RECENT_ROAM_ZONE_COUNT = 2;
 const FAR_ROAM_CANDIDATE_POOL = 3;
+const MIN_ROAM_DISTANCE_RATIO = 0.42;
 const RUN_ENTER_DISTANCE_FOLLOWING = 700;
 const RUN_ENTER_DISTANCE_ROAMING = 900;
 const RUN_EXIT_DISTANCE = 420;
 const MIN_WALK_BEFORE_RUN_MS = 900;
 const MIN_RUN_DURATION_MS = 800;
 const SPEED_EASING = 0.12;
+const MOVEMENT_SPEED_SCALE = 0.8;
 
 function createPetEngine({ window, screen, windowSize, getSettings, onSleepChanged }) {
   const initialBounds = window.getBounds();
@@ -34,6 +38,8 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   let state = PET_STATES.IDLE;
   let stateChangedAt = Date.now();
   let currentSpeed = 0;
+  let lastPlacedX = null;
+  let lastPlacedY = null;
   let lastSentState = null;
   let lastSentDirection = null;
   let pendingDirection = null;
@@ -41,6 +47,7 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
   let lastInteractionAt = Date.now();
   let lovingUntil = 0;
   let roamTarget = null;
+  let recentRoamZoneIds = [];
   let restUntil = Date.now() + randomBetween(1000, 3000);
 
   function start() {
@@ -114,21 +121,34 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     if (now < restUntil) return null;
     const center = { x: Math.round(x + windowSize / 2), y: Math.round(y + windowSize / 2) };
     const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
-    const candidates = [];
-    for (let attempt = 0; attempt < ROAM_CANDIDATE_COUNT; attempt += 1) {
-      const candidate = {
-        x: randomBetween(area.minX, area.maxX),
-        y: randomBetween(area.minY, area.maxY)
-      };
-      candidates.push({
-        ...candidate,
-        distance: Math.hypot(candidate.x - x, candidate.y - y)
-      });
+    const currentZoneId = roamZoneIdForPoint(x, y, area);
+    let availableZones = createRoamZones(area).filter((zone) => (
+      zone.id !== currentZoneId && !recentRoamZoneIds.includes(zone.id)
+    ));
+    if (availableZones.length === 0) {
+      availableZones = createRoamZones(area).filter((zone) => zone.id !== currentZoneId);
     }
-    candidates.sort((first, second) => second.distance - first.distance);
-    const farPool = candidates.slice(0, FAR_ROAM_CANDIDATE_POOL);
+
+    const candidates = availableZones.map((zone) => {
+      const candidate = randomPointInRoamZone(zone);
+      return {
+        ...candidate,
+        zoneId: zone.id,
+        distance: Math.hypot(candidate.x - x, candidate.y - y)
+      };
+    });
+    const areaDiagonal = Math.hypot(area.maxX - area.minX, area.maxY - area.minY);
+    const distantCandidates = candidates.filter((candidate) => (
+      candidate.distance >= areaDiagonal * MIN_ROAM_DISTANCE_RATIO
+    ));
+    const eligibleCandidates = distantCandidates.length > 0 ? distantCandidates : candidates;
+    eligibleCandidates.sort((first, second) => second.distance - first.distance);
+    const farPool = eligibleCandidates.slice(0, FAR_ROAM_CANDIDATE_POOL);
     const selected = farPool[Math.floor(Math.random() * farPool.length)];
     roamTarget = { x: selected.x, y: selected.y };
+    recentRoamZoneIds = [selected.zoneId, ...recentRoamZoneIds]
+      .filter((zoneId, index, values) => values.indexOf(zoneId) === index)
+      .slice(0, RECENT_ROAM_ZONE_COUNT);
     return roamTarget;
   }
 
@@ -142,39 +162,36 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
 
     const nextX = x + deltaX;
     const nextY = y + deltaY;
-    const display = screen.getDisplayNearestPoint({ x: Math.round(nextX), y: Math.round(nextY) });
-    const area = safeMovementArea(display.workArea, windowSize);
-    x = clamp(nextX, area.minX, area.maxX);
-    y = clamp(nextY, area.minY, area.maxY);
+    const constrained = constrainToVisibleWorkAreas(nextX, nextY, screen, windowSize);
+    x = constrained.x;
+    y = constrained.y;
     placeWindow();
   }
 
   function keepWindowOnScreen() {
-    const center = { x: Math.round(x + windowSize / 2), y: Math.round(y + windowSize / 2) };
-    const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
-    const safeX = clamp(x, area.minX, area.maxX);
-    const safeY = clamp(y, area.minY, area.maxY);
+    const constrained = constrainToVisibleWorkAreas(x, y, screen, windowSize);
+    const safeX = constrained.x;
+    const safeY = constrained.y;
     if (safeX !== x || safeY !== y) {
       x = safeX;
       y = safeY;
-      placeWindow();
+      placeWindow(true);
     }
   }
 
   function ensureActualWindowOnScreen() {
     if (window.isDestroyed()) return;
     const bounds = window.getBounds();
-    const center = { x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height / 2) };
-    const area = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
-    const safeX = clamp(bounds.x, area.minX, area.maxX);
-    const safeY = clamp(bounds.y, area.minY, area.maxY);
+    const constrained = constrainToVisibleWorkAreas(bounds.x, bounds.y, screen, windowSize);
+    const safeX = constrained.x;
+    const safeY = constrained.y;
 
     const sizeChanged = bounds.width !== windowSize || bounds.height !== windowSize;
     if (safeX !== bounds.x || safeY !== bounds.y || sizeChanged) {
       x = safeX;
       y = safeY;
       roamTarget = null;
-      placeWindow();
+      placeWindow(true);
       return;
     }
 
@@ -190,16 +207,21 @@ function createPetEngine({ window, screen, windowSize, getSettings, onSleepChang
     y = clamp(cursor.y - windowSize / 2, area.minY, area.maxY);
     roamTarget = null;
     restUntil = Date.now() + 500;
-    placeWindow();
+    placeWindow(true);
   }
 
-  function placeWindow() {
+  function placeWindow(force = false) {
+    const roundedX = Math.round(x);
+    const roundedY = Math.round(y);
+    if (!force && roundedX === lastPlacedX && roundedY === lastPlacedY) return;
     window.setBounds({
-      x: Math.round(x),
-      y: Math.round(y),
+      x: roundedX,
+      y: roundedY,
       width: windowSize,
       height: windowSize
     }, false);
+    lastPlacedX = roundedX;
+    lastPlacedY = roundedY;
   }
 
   function interact() {
@@ -341,9 +363,9 @@ function movementState(currentState, distance, isFollowingCursor, timeInState) {
 }
 
 function movementSpeed(state) {
-  if (state === PET_STATES.RUNNING) return 5.5;
-  if (state === PET_STATES.WALKING) return 2.5;
-  return 0.8;
+  if (state === PET_STATES.RUNNING) return 5.5 * MOVEMENT_SPEED_SCALE;
+  if (state === PET_STATES.WALKING) return 2.5 * MOVEMENT_SPEED_SCALE;
+  return 0.8 * MOVEMENT_SPEED_SCALE;
 }
 
 function randomBetween(minimum, maximum) {
@@ -361,8 +383,118 @@ function safeMovementArea(workArea, windowSize) {
   };
 }
 
+function createRoamZones(area) {
+  const zones = [];
+  const totalWidth = area.maxX - area.minX;
+  const totalHeight = area.maxY - area.minY;
+  for (let row = 0; row < ROAM_GRID_ROWS; row += 1) {
+    for (let column = 0; column < ROAM_GRID_COLUMNS; column += 1) {
+      zones.push({
+        id: row * ROAM_GRID_COLUMNS + column,
+        minX: area.minX + totalWidth * column / ROAM_GRID_COLUMNS,
+        maxX: area.minX + totalWidth * (column + 1) / ROAM_GRID_COLUMNS,
+        minY: area.minY + totalHeight * row / ROAM_GRID_ROWS,
+        maxY: area.minY + totalHeight * (row + 1) / ROAM_GRID_ROWS
+      });
+    }
+  }
+  return zones;
+}
+
+function roamZoneIdForPoint(x, y, area) {
+  const width = Math.max(1, area.maxX - area.minX);
+  const height = Math.max(1, area.maxY - area.minY);
+  const column = clamp(Math.floor((x - area.minX) / width * ROAM_GRID_COLUMNS), 0, ROAM_GRID_COLUMNS - 1);
+  const row = clamp(Math.floor((y - area.minY) / height * ROAM_GRID_ROWS), 0, ROAM_GRID_ROWS - 1);
+  return row * ROAM_GRID_COLUMNS + column;
+}
+
+function randomPointInRoamZone(zone) {
+  const horizontalPadding = (zone.maxX - zone.minX) * 0.12;
+  const verticalPadding = (zone.maxY - zone.minY) * 0.12;
+  return {
+    x: randomBetween(zone.minX + horizontalPadding, zone.maxX - horizontalPadding),
+    y: randomBetween(zone.minY + verticalPadding, zone.maxY - verticalPadding)
+  };
+}
+
+function constrainToVisibleWorkAreas(x, y, screen, windowSize) {
+  const workAreas = typeof screen.getAllDisplays === "function"
+    ? screen.getAllDisplays().map((display) => display.workArea)
+    : [screen.getDisplayNearestPoint({ x, y }).workArea];
+
+  if (isWindowFullyVisible(x, y, windowSize, workAreas)) return { x, y };
+
+  const center = { x: Math.round(x + windowSize / 2), y: Math.round(y + windowSize / 2) };
+  const nearestArea = safeMovementArea(screen.getDisplayNearestPoint(center).workArea, windowSize);
+  return {
+    x: clamp(x, nearestArea.minX, nearestArea.maxX),
+    y: clamp(y, nearestArea.minY, nearestArea.maxY)
+  };
+}
+
+function isWindowFullyVisible(x, y, windowSize, workAreas) {
+  let uncovered = [{
+    x: x - EDGE_MARGIN,
+    y: y - EDGE_MARGIN,
+    width: windowSize + EDGE_MARGIN * 2,
+    height: windowSize + EDGE_MARGIN * 2
+  }];
+
+  for (const area of workAreas) {
+    uncovered = uncovered.flatMap((rectangle) => subtractRectangle(rectangle, area));
+    if (uncovered.length === 0) return true;
+  }
+  return false;
+}
+
+function subtractRectangle(rectangle, coveringArea) {
+  const left = Math.max(rectangle.x, coveringArea.x);
+  const top = Math.max(rectangle.y, coveringArea.y);
+  const right = Math.min(
+    rectangle.x + rectangle.width,
+    coveringArea.x + coveringArea.width
+  );
+  const bottom = Math.min(
+    rectangle.y + rectangle.height,
+    coveringArea.y + coveringArea.height
+  );
+
+  if (left >= right || top >= bottom) return [rectangle];
+
+  const pieces = [];
+  if (top > rectangle.y) {
+    pieces.push({ x: rectangle.x, y: rectangle.y, width: rectangle.width, height: top - rectangle.y });
+  }
+  if (bottom < rectangle.y + rectangle.height) {
+    pieces.push({
+      x: rectangle.x,
+      y: bottom,
+      width: rectangle.width,
+      height: rectangle.y + rectangle.height - bottom
+    });
+  }
+  if (left > rectangle.x) {
+    pieces.push({ x: rectangle.x, y: top, width: left - rectangle.x, height: bottom - top });
+  }
+  if (right < rectangle.x + rectangle.width) {
+    pieces.push({
+      x: right,
+      y: top,
+      width: rectangle.x + rectangle.width - right,
+      height: bottom - top
+    });
+  }
+  return pieces;
+}
+
 function clamp(value, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-module.exports = { createPetEngine };
+module.exports = {
+  createPetEngine,
+  PET_STATES,
+  movementState,
+  constrainToVisibleWorkAreas
+};
